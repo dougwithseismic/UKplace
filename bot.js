@@ -2,7 +2,7 @@ import fetch from 'node-fetch';
 import getPixels from "get-pixels";
 import WebSocket from 'ws';
 
-const HEADLESS_VERSION = 3;
+const HEADLESS_VERSION = 4;
 
 const args = process.argv.slice(2);
 
@@ -21,7 +21,7 @@ if (redditSessionCookies.length >= 4) {
 
 var hasTokens = false;
 
-let accessTokens;
+let accessTokens = [];
 let defaultAccessToken;
 
 var cnc_url = 'flag.gowergeeks.com:1200'
@@ -135,8 +135,8 @@ let getPendingWork = (work, rgbaOrder, rgbaCanvas) => {
 
 function startPlacement() {
     if (!hasTokens) {
-        // 1 sec wait
-        setTimeout(startPlacement, 1000);
+        // 6 sec wait
+        setTimeout(startPlacement, 6000);
         return
     }
 
@@ -150,6 +150,12 @@ function startPlacement() {
 }
 
 async function refreshTokens() {
+    if (accessTokens.length === 0) {
+        for (const _ of redditSessionCookies) {
+            accessTokens.push({});
+        }
+    }
+
     let tokens = [];
     for (const cookie of redditSessionCookies) {
         const response = await fetch("https://www.reddit.com/r/place/", {
@@ -164,6 +170,10 @@ async function refreshTokens() {
     }
 
     console.log("Refreshed tokens: ", tokens)
+
+    tokens.forEach((token, idx) => {
+        accessTokens[idx].token = token;
+    });
 
     accessTokens = tokens;
     defaultAccessToken = tokens[0];
@@ -215,7 +225,7 @@ function connectSocket() {
 async function attemptPlace(accessToken) {
     let retry = () => attemptPlace(accessToken);
     if (currentOrderList === undefined) {
-        setTimeout(retry, 2000); // 2sec wait
+        setTimeout(retry, 10000); // 10sec wait
         return;
     }
     
@@ -259,19 +269,25 @@ async function attemptPlace(accessToken) {
     const res = await place(x, y, COLOR_MAPPINGS[hex], accessToken);
     const data = await res.json();
     try {
-        if (data.errors) {
-            const error = data.errors[0];
-            if (error.extensions && error.extensions.nextAvailablePixelTimestamp) {
+        if (data.error || data.errors) {
+            const error = data.error || data.errors[0];
+            if (error.extensions && error.extensions.nextAvailablePixelTs) {
                 const nextPixel = error.extensions.nextAvailablePixelTs + 3000;
                 const nextPixelDate = new Date(nextPixel);
                 const delay = nextPixelDate.getTime() - Date.now();
                 console.log(`Pixel posted too soon! Next pixel will be placed at ${nextPixelDate.toLocaleTimeString()}.`)
-                setTimeout(retry, delay);
+
+                if (delay > 99999999999) {
+                    console.warn("You have been softbanned by Reddit from placing pixels. You'll need to use another account :(")
+                    setTimeout(retry, 10000);   
+                } else {
+                    setTimeout(retry, delay);
+                }
             } else {
                 if (error.message == "Ratelimited") {
                     console.error("[!!] CRITICAL ERROR: You have been ratelimited, close any tabs on your browser with this account active and/or wait a few minutes before trying to start this script again.");
                 } else {
-                    console.error(`[!!] CRITICAL ERROR: ${error.message}. Did you copy the 'reddit_session' cookie correctly?`);
+                    console.error(`[!!] CRITICAL ERROR: ${error.message || error.reason || "The 'idk' error"}. Did you copy the 'reddit_session' cookie correctly?`);
                 }
 
                 console.error(`[!!] Fix this error, then restart the script to continue...`);
